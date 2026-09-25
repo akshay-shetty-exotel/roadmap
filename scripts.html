@@ -1,0 +1,874 @@
+<script>
+  // ══════════════════════════════════════════════════════════════
+  // FEATURE FLAGS — set true/false to show/hide each tab
+  // ══════════════════════════════════════════════════════════════
+  var SHOW_ROADMAP = true; // Table view
+  var SHOW_TIMELINE = true; // Timeline (Oct / Nov / Dec)
+  var SHOW_SUMMARY = false; // Executive summary
+
+  // ══════════════════════════════════════════════════════════════
+  // CONSTANTS
+  // ══════════════════════════════════════════════════════════════
+  var MONTHS = ["October 2026", "November 2026", "December 2026"];
+
+  var DEFINED_PODS = {
+    Voice4AI: "#6366F1",
+    Voicebot: "#0EA5E9",
+    Foundation: "#F59E0B",
+    "CX: App": "#EC4899",
+    "CX: Outbound": "#10B981",
+    "CE: Chatbot": "#8B5CF6",
+    AIX: "#EF4444",
+    "Ecosystem AI": "#06B6D4",
+    "IPO Readiness": "#F97316",
+  };
+  var EXTRA_COLORS = ["#84CC16", "#A855F7", "#14B8A6", "#FB923C", "#64748B"];
+  var podColorCache = Object.assign({}, DEFINED_PODS);
+
+  function podColor(pod) {
+    if (podColorCache[pod]) return podColorCache[pod];
+    var used =
+      Object.keys(podColorCache).length - Object.keys(DEFINED_PODS).length;
+    var color = EXTRA_COLORS[used % EXTRA_COLORS.length];
+    podColorCache[pod] = color;
+    return color;
+  }
+
+  var STATUS_COLOR = {
+    Planned: "#94A3B8",
+    "In Progress": "#0F766E",
+    "On Hold": "#F59E0B",
+    "To Do": "#CBD3DD",
+    "Under Review": "#6366F1",
+    Done: "#10B981",
+    "Won't do": "#EF4444",
+    Committed: "#0EA5E9",
+    TBD: "#D1D5DB",
+    Experiment: "#8B5CF6",
+    Deferred: "#B45309",
+    // legacy — keep for any old data
+    Exploring: "#CBD3DD",
+    "In progress": "#0F766E",
+    Shipped: "#10B981",
+    Paused: "#F59E0B",
+  };
+
+  // ══════════════════════════════════════════════════════════════
+  // UNIVERSAL STATUS ORDER — 50 statuses covering full delivery cycle
+  // Only statuses present in sheet data appear in filter.
+  // This array defines their order. Unknown statuses go last.
+  // ══════════════════════════════════════════════════════════════
+  var UNIVERSAL_STATUS_ORDER = [
+    "TBD",
+    "Backlog",
+    "To Do",
+    "Committed",
+    "Planned",
+    "Exploring",
+    "Experiment",
+    "Scoping",
+    "Prioritised",
+    "Approved",
+    "In Progress",
+    "In Development",
+    "In Design",
+    "In Discovery",
+    "In Analysis",
+    "In Review",
+    "In Planning",
+    "Groomed",
+    "Ready for Dev",
+    "Ready for Design",
+    "Ready for QA",
+    "Under Review",
+    "Design Review",
+    "Tech Review",
+    "Product Review",
+    "Under Architecture Review",
+    "Under PO & UX Review",
+    "Under Code Review",
+    "Under QA",
+    "In Test",
+    "UAT",
+    "Staging",
+    "Ready for Release",
+    "Release Candidate",
+    "Deployed",
+    "Done",
+    "Shipped",
+    "Closed",
+    "Verified",
+    "Released",
+    "Live",
+    "Completed",
+    "On Hold",
+    "Paused",
+    "Blocked",
+    "Deferred",
+    "Cancelled",
+    "Won't do",
+    "Duplicate",
+    "Deprecated",
+  ];
+
+  // ══════════════════════════════════════════════════════════════
+  // STATE
+  // ══════════════════════════════════════════════════════════════
+  var ALL_ITEMS = [];
+  var META = {};
+  var state = {
+    view: "",
+    pods: new Set(),
+    q: "",
+    status: "",
+    priority: "",
+    ahaOnly: false,
+  };
+
+  // ══════════════════════════════════════════════════════════════
+  // BOOT
+  // ══════════════════════════════════════════════════════════════
+  window.addEventListener("DOMContentLoaded", function () {
+    if (typeof ROADMAP_DATA === "undefined") {
+      showError(
+        "ROADMAP_DATA missing. Make sure index.html uses <code>var</code> not <code>const</code> for ROADMAP_DATA."
+      );
+      return;
+    }
+    if (ROADMAP_DATA.error) {
+      showError("Sheet error: <b>" + ROADMAP_DATA.error + "</b>");
+      return;
+    }
+    ALL_ITEMS = ROADMAP_DATA.items || [];
+    META = ROADMAP_DATA.meta || {};
+
+    document.getElementById("syncTxt").textContent =
+      ALL_ITEMS.length + " items · Q3 FY27";
+    document.getElementById("syncDot").className = "dot live";
+
+    buildTabs();
+    setupControls();
+    populateFilters();
+    render();
+  });
+
+  function showError(msg) {
+    document.getElementById("view").innerHTML =
+      '<div class="error-state"><h3>Error</h3><p style="color:var(--muted);margin-top:6px">' +
+      msg +
+      "</p></div>";
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // BUILD TABS FROM FLAGS
+  // ══════════════════════════════════════════════════════════════
+  function buildTabs() {
+    var tabs = [];
+    if (SHOW_ROADMAP) tabs.push({ v: "table", label: "Roadmap" });
+    if (SHOW_TIMELINE) tabs.push({ v: "timeline", label: "Timeline" });
+    if (SHOW_SUMMARY) tabs.push({ v: "summary", label: "Summary" });
+
+    if (!tabs.length) {
+      showError(
+        "All tabs are set to false. Set at least one flag to true in scripts.html."
+      );
+      return;
+    }
+
+    var nav = document.getElementById("viewbar");
+    nav.innerHTML = "";
+    tabs.forEach(function (t, i) {
+      var btn = document.createElement("button");
+      btn.className = "vtab";
+      btn.setAttribute("role", "tab");
+      btn.setAttribute("aria-selected", i === 0 ? "true" : "false");
+      btn.setAttribute("data-v", t.v);
+      btn.textContent = t.label;
+      nav.appendChild(btn);
+    });
+
+    state.view = tabs[0].v;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // FILTERS
+  // ══════════════════════════════════════════════════════════════
+  function populateFilters() {
+    var pods =
+      META.pods && META.pods.length
+        ? META.pods
+        : ALL_ITEMS.map(function (i) {
+            return i.pod;
+          })
+            .filter(Boolean)
+            .filter(function (v, i, a) {
+              return a.indexOf(v) === i;
+            })
+            .sort();
+
+    var chipRow = document.getElementById("podChips");
+    chipRow.innerHTML = "";
+    pods.forEach(function (p) {
+      var c = podColor(p);
+      var btn = document.createElement("button");
+      btn.className = "chip";
+      btn.setAttribute("aria-pressed", "false");
+      btn.style.setProperty("--c", c);
+      btn.innerHTML = '<span class="sw"></span>' + p;
+      btn.addEventListener("click", function () {
+        state.pods.has(p) ? state.pods.delete(p) : state.pods.add(p);
+        btn.setAttribute("aria-pressed", String(state.pods.has(p)));
+        render();
+      });
+      chipRow.appendChild(btn);
+    });
+
+    var sSel = document.getElementById("statusSel");
+    sSel.innerHTML = '<option value="">All statuses</option>';
+    var rawStatuses =
+      META.statuses && META.statuses.length
+        ? META.statuses
+        : ["Exploring", "Planned", "In Progress", "Shipped", "Paused"];
+    // Sort by UNIVERSAL_STATUS_ORDER; unknowns go last alphabetically
+    var statuses = rawStatuses.slice().sort(function (a, b) {
+      var ai = UNIVERSAL_STATUS_ORDER.indexOf(a);
+      var bi = UNIVERSAL_STATUS_ORDER.indexOf(b);
+      if (ai === -1 && bi === -1) return a.localeCompare(b);
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+    statuses.forEach(function (s) {
+      var o = document.createElement("option");
+      o.value = s;
+      o.textContent = s;
+      sSel.appendChild(o);
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // CONTROLS
+  // ══════════════════════════════════════════════════════════════
+  function setupControls() {
+    document.getElementById("q").addEventListener("input", function (e) {
+      state.q = e.target.value;
+      render();
+    });
+    document
+      .getElementById("statusSel")
+      .addEventListener("change", function (e) {
+        state.status = e.target.value;
+        render();
+      });
+    document.getElementById("priSel").addEventListener("change", function (e) {
+      state.priority = e.target.value;
+      render();
+    });
+    document.getElementById("resetBtn").addEventListener("click", resetAll);
+    document.getElementById("scrim").addEventListener("click", closeDrawer);
+
+    // Reload button — uses google.script.run to call server-side getLatestData()
+    // This is the only reliable way to fetch fresh data without a page reload in Apps Script
+    var reloadBtn = document.getElementById("reloadBtn");
+    if (reloadBtn) {
+      reloadBtn.addEventListener("click", function () {
+        var dot = document.getElementById("syncDot");
+        var syncTxt = document.getElementById("syncTxt");
+        if (dot) dot.className = "dot loading";
+        syncTxt.textContent = "Refreshing…";
+        reloadBtn.classList.add("spinning");
+        reloadBtn.disabled = true;
+
+        google.script.run
+          .withSuccessHandler(function (jsonStr) {
+            try {
+              var data = JSON.parse(jsonStr);
+              ALL_ITEMS = data.items || [];
+              META = data.meta || {};
+              populateFilters();
+              render();
+              if (dot) dot.className = "dot live";
+              syncTxt.textContent = ALL_ITEMS.length + " items · Q3 FY27";
+            } catch (e) {
+              if (dot) dot.className = "dot error";
+              syncTxt.textContent = "Parse error";
+            }
+            reloadBtn.classList.remove("spinning");
+            reloadBtn.disabled = false;
+          })
+          .withFailureHandler(function (err) {
+            if (dot) dot.className = "dot error";
+            syncTxt.textContent = "Refresh failed";
+            reloadBtn.classList.remove("spinning");
+            reloadBtn.disabled = false;
+          })
+          .getLatestData();
+      });
+    }
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") closeDrawer();
+    });
+
+    var ahaBtn = document.getElementById("ahaToggle");
+    ahaBtn.addEventListener("click", function () {
+      state.ahaOnly = !state.ahaOnly;
+      ahaBtn.setAttribute("aria-pressed", String(state.ahaOnly));
+      render();
+    });
+
+    document.getElementById("viewbar").addEventListener("click", function (e) {
+      var t = e.target.closest(".vtab");
+      if (!t) return;
+      document.querySelectorAll(".vtab").forEach(function (x) {
+        x.setAttribute("aria-selected", "false");
+      });
+      t.setAttribute("aria-selected", "true");
+      state.view = t.dataset.v;
+      render();
+    });
+  }
+
+  function resetAll() {
+    state.pods.clear();
+    state.q = "";
+    state.status = "";
+    state.priority = "";
+    state.ahaOnly = false;
+    document.getElementById("q").value = "";
+    document.getElementById("statusSel").value = "";
+    document.getElementById("priSel").value = "";
+    document.getElementById("ahaToggle").setAttribute("aria-pressed", "false");
+    document.querySelectorAll(".chip").forEach(function (c) {
+      c.setAttribute("aria-pressed", "false");
+    });
+    render();
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // FILTERING
+  // ══════════════════════════════════════════════════════════════
+  function filtered() {
+    var q = state.q.trim().toLowerCase();
+    return ALL_ITEMS.filter(function (d) {
+      if (state.pods.size && !state.pods.has(d.pod)) return false;
+      if (state.status && d.status !== state.status) return false;
+      if (state.priority && d.priority !== state.priority) return false;
+      if (state.ahaOnly && !d.ideaKey) return false;
+      if (q) {
+        var hay = [
+          d.title,
+          d.pod,
+          d.spoc,
+          d.jiraKey,
+          d.ideaKey,
+          d.summary,
+          d.status,
+          d.theme,
+        ]
+          .join(" ")
+          .toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // RENDER DISPATCHER
+  // ══════════════════════════════════════════════════════════════
+  function render() {
+    var items = filtered();
+    var podTxt = state.pods.size
+      ? Array.from(state.pods).join(", ")
+      : "all pods";
+    document.getElementById("resultLine").innerHTML =
+      "<b>" +
+      items.length +
+      "</b> item" +
+      (items.length !== 1 ? "s" : "") +
+      " · " +
+      podTxt +
+      (state.q ? ' · matching "<b>' + esc(state.q) + '</b>"' : "");
+
+    var html = "";
+    if (state.view === "table") html = renderTable(items);
+    else if (state.view === "timeline") html = renderTimeline(items);
+    else if (state.view === "summary") html = renderSummary(items);
+
+    document.getElementById("view").innerHTML = html;
+
+    document.querySelectorAll("[data-id]").forEach(function (el) {
+      el.addEventListener("click", function (e) {
+        if (e.target.tagName === "A") return;
+        openDrawer(+el.dataset.id);
+      });
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // VIEW: ROADMAP TABLE
+  // ══════════════════════════════════════════════════════════════
+  function renderTable(items) {
+    if (!items.length) return emptyHtml("No matches", "Try clearing a filter.");
+    var rows = items
+      .map(function (d) {
+        var c = podColor(d.pod);
+        return (
+          '<tr data-id="' +
+          d.id +
+          '">' +
+          '<td><div class="t-title">' +
+          esc(d.title) +
+          (d.summary ? '<div class="t-sum">' + esc(d.summary) + "</div>" : "") +
+          "</div></td>" +
+          '<td><span class="pod-dot" style="--c:' +
+          c +
+          '"><span class="sw"></span>' +
+          esc(d.pod) +
+          "</span></td>" +
+          "<td>" +
+          statusPill(d) +
+          "</td>" +
+          "<td>" +
+          (d.priority
+            ? '<span class="pri-badge ' +
+              d.priority +
+              '">' +
+              d.priority +
+              "</span>"
+            : "—") +
+          "</td>" +
+          "<td>" +
+          esc(d.spoc || "—") +
+          "</td>" +
+          "<td>" +
+          (d.jiraKey
+            ? '<a class="jira-link" href="' +
+              d.jiraUrl +
+              '" target="_blank" rel="noopener" onclick="event.stopPropagation()">' +
+              esc(d.jiraKey) +
+              " ↗</a>"
+            : "—") +
+          "</td>" +
+          "</tr>"
+        );
+      })
+      .join("");
+    return (
+      '<table class="roadmap-table">' +
+      "<thead><tr><th>Title</th><th>Pod</th><th>Status</th><th>Priority</th><th>SPOC</th><th>Jira Key</th></tr></thead>" +
+      "<tbody>" +
+      rows +
+      "</tbody></table>"
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // VIEW: TIMELINE
+  // ══════════════════════════════════════════════════════════════
+  function renderTimeline(items) {
+    var pods = [];
+    Object.keys(DEFINED_PODS).forEach(function (p) {
+      if (
+        items.some(function (d) {
+          return d.pod === p;
+        })
+      )
+        pods.push(p);
+    });
+    items.forEach(function (d) {
+      if (pods.indexOf(d.pod) === -1) pods.push(d.pod);
+    });
+    if (!pods.length)
+      return emptyHtml("No data", "No items match the current filters.");
+
+    var noDate = items.filter(function (d) {
+      return d.targetMonth === -1 || d.targetMonth === undefined;
+    });
+
+    var head =
+      '<div class="tl-head">' +
+      '<div class="tl-qh">Pod</div>' +
+      MONTHS.map(function (m) {
+        return '<div class="tl-qh">' + m + "</div>";
+      }).join("") +
+      "</div>";
+
+    var rows = pods
+      .map(function (p) {
+        var c = podColor(p);
+        var cells = [0, 1, 2]
+          .map(function (mi) {
+            var it = items.filter(function (d) {
+              return d.pod === p && d.targetMonth === mi;
+            });
+            return (
+              '<div class="tl-cell">' +
+              it
+                .map(function (d) {
+                  return (
+                    '<div class="tl-bar" data-id="' +
+                    d.id +
+                    '" style="--c:' +
+                    c +
+                    '">' +
+                    '<div class="bt">' +
+                    esc(d.title) +
+                    "</div>" +
+                    '<div class="bm">' +
+                    (d.priority
+                      ? '<span class="pri-badge ' +
+                        d.priority +
+                        '">' +
+                        d.priority +
+                        "</span>"
+                      : "") +
+                    "<span>" +
+                    esc(d.status) +
+                    "</span>" +
+                    "</div></div>"
+                  );
+                })
+                .join("") +
+              "</div>"
+            );
+          })
+          .join("");
+        return (
+          '<div class="tl-row"><div class="tl-label" style="--c:' +
+          c +
+          '"><span class="sw"></span>' +
+          p +
+          "</div>" +
+          cells +
+          "</div>"
+        );
+      })
+      .join("");
+
+    var noDtSection = noDate.length
+      ? '<div class="no-date-row">⚠ ' +
+        noDate.length +
+        " item" +
+        (noDate.length !== 1 ? "s" : "") +
+        " have no target date — not shown on timeline.</div>"
+      : "";
+
+    return (
+      '<div class="tl-wrap"><div class="tl-table">' +
+      head +
+      rows +
+      "</div></div>" +
+      noDtSection
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // VIEW: EXECUTIVE SUMMARY
+  // ══════════════════════════════════════════════════════════════
+  function renderSummary(items) {
+    var inProg = items.filter(function (d) {
+      return d.status === "In progress";
+    }).length;
+    var planned = items.filter(function (d) {
+      return d.status === "Planned";
+    }).length;
+    var shipped = items.filter(function (d) {
+      return d.status === "Shipped";
+    }).length;
+    var p0 = items.filter(function (d) {
+      return d.priority === "P0";
+    }).length;
+    var withAha = items.filter(function (d) {
+      return !!d.ideaKey;
+    }).length;
+
+    var pods = [];
+    Object.keys(DEFINED_PODS).forEach(function (p) {
+      if (
+        items.some(function (d) {
+          return d.pod === p;
+        })
+      )
+        pods.push(p);
+    });
+    items.forEach(function (d) {
+      if (pods.indexOf(d.pod) === -1) pods.push(d.pod);
+    });
+
+    // KPI cards
+    var kpis =
+      '<div class="kpi-row">' +
+      kpi(items.length, "Total items") +
+      kpi(inProg, "In progress", inProg > 0 ? "active" : "") +
+      kpi(planned, "Planned") +
+      kpi(shipped, "Shipped", shipped > 0 ? "good" : "") +
+      kpi(p0, "P0 priorities", p0 > 0 ? "danger" : "") +
+      kpi(withAha, "Linked to Aha!") +
+      "</div>";
+
+    // Pod breakdown bars
+    var podBars = pods
+      .map(function (p) {
+        var it = items.filter(function (d) {
+          return d.pod === p;
+        });
+        var c = podColor(p);
+        var segs = ["In progress", "Planned", "Shipped", "Exploring", "Paused"]
+          .map(function (s) {
+            var n = it.filter(function (d) {
+              return d.status === s;
+            }).length;
+            if (!n) return "";
+            return (
+              '<i style="width:' +
+              (n / it.length) * 100 +
+              "%;background:" +
+              STATUS_COLOR[s] +
+              '"></i>'
+            );
+          })
+          .join("");
+        var spoc = it[0] ? it[0].spoc : "";
+        return (
+          '<div class="bar-row">' +
+          '<div class="bn" style="--c:' +
+          c +
+          '"><span class="sw"></span>' +
+          p +
+          "</div>" +
+          '<div class="track">' +
+          segs +
+          "</div>" +
+          '<div class="bv">' +
+          it.length +
+          "</div>" +
+          '<div class="bspoc">' +
+          esc(spoc) +
+          "</div>" +
+          "</div>"
+        );
+      })
+      .join("");
+
+    // P0 watchlist
+    var p0list =
+      items
+        .filter(function (d) {
+          return d.priority === "P0";
+        })
+        .map(function (d) {
+          return (
+            '<div class="aitem" data-id="' +
+            d.id +
+            '" style="--c:' +
+            podColor(d.pod) +
+            '">' +
+            '<span class="sw"></span>' +
+            '<span class="ai-title">' +
+            esc(d.title) +
+            "</span>" +
+            '<span class="ai-pod">' +
+            esc(d.pod) +
+            "</span>" +
+            '<span class="pri-badge P0">P0</span>' +
+            "</div>"
+          );
+        })
+        .join("") ||
+      '<div class="empty-sub">No P0 items in current view.</div>';
+
+    // Legend
+    var legend =
+      '<div class="legend">' +
+      ["In progress", "Planned", "Shipped", "Exploring"]
+        .map(function (s) {
+          return (
+            '<span><i style="background:' +
+            STATUS_COLOR[s] +
+            '"></i>' +
+            s +
+            "</span>"
+          );
+        })
+        .join("") +
+      "</div>";
+
+    return (
+      kpis +
+      '<div class="exec-panels">' +
+      '<div class="panel">' +
+      '<h5>Portfolio by pod <span class="h5-sub">· Q3 FY27</span></h5>' +
+      '<div class="bar-header"><span>Pod</span><span style="flex:1"></span><span>Items</span><span class="bspoc-h">PM</span></div>' +
+      podBars +
+      legend +
+      "</div>" +
+      '<div class="panel"><h5>P0 watchlist</h5>' +
+      p0list +
+      "</div>" +
+      "</div>"
+    );
+  }
+
+  function kpi(n, label, cls) {
+    return (
+      '<div class="kpi ' +
+      (cls || "") +
+      '"><div class="kn">' +
+      n +
+      '</div><div class="kl">' +
+      label +
+      "</div></div>"
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // MULTI-ID BUTTON BUILDERS
+  // ══════════════════════════════════════════════════════════════
+  function buildJiraButtons(d) {
+    if (!d.jiraKeys || d.jiraKeys.length === 0) {
+      return '<button class="d-btn ghost" disabled style="opacity:.6">No Jira epic linked</button>';
+    }
+    return d.jiraKeys
+      .map(function (k, i) {
+        var url =
+          d.jiraUrls && d.jiraUrls[i]
+            ? d.jiraUrls[i]
+            : "https://exotel.atlassian.net/browse/" + k;
+        return (
+          '<a class="d-btn jira" href="' +
+          url +
+          '" target="_blank" rel="noopener"><img src="https://cdn.worldvectorlogo.com/logos/jira-1.svg" style="height:13px;filter:brightness(0) invert(1);vertical-align:middle;margin-right:4px" alt=""> ' +
+          esc(k) +
+          " ↗</a>"
+        );
+      })
+      .join("");
+  }
+
+  function buildAhaButtons(d) {
+    if (!d.ideaKeys || d.ideaKeys.length === 0) return "";
+    return d.ideaKeys
+      .map(function (k, i) {
+        var ahaUrl = d.ahaUrls && d.ahaUrls[i] ? d.ahaUrls[i] : "";
+        if (ahaUrl) {
+          var ahaId = ahaUrl.split("/").pop();
+          return (
+            '<a class="d-btn aha-ideas" href="' +
+            ahaUrl +
+            '" target="_blank" rel="noopener">Aha! · ' +
+            esc(ahaId) +
+            " ↗</a>"
+          );
+        }
+        return (
+          '<button class="d-btn ghost" disabled style="opacity:.6">Aha! · ' +
+          esc(k) +
+          " (URL not found)</button>"
+        );
+      })
+      .join("");
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // DRAWER
+  // ══════════════════════════════════════════════════════════════
+  function openDrawer(id) {
+    var d = ALL_ITEMS.find(function (x) {
+      return x.id === id;
+    });
+    if (!d) return;
+    var c = podColor(d.pod);
+    var drawer = document.getElementById("drawer");
+    drawer.style.setProperty("--c", c);
+
+    // Idea key → links to Jira issue; Aha! URL fetched server-side from customfield_13184
+    // idea rows removed — shown as buttons below
+
+    drawer.innerHTML =
+      '<div class="d-head">' +
+      '<div class="d-row1">' +
+      '<span class="pod-dot" style="--c:' +
+      c +
+      '"><span class="sw"></span>' +
+      esc(d.pod) +
+      "</span>" +
+      (d.priority
+        ? '<span class="pri-badge ' + d.priority + '">' + d.priority + "</span>"
+        : "") +
+      '<button class="d-close" id="dClose" aria-label="Close"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>' +
+      "</div>" +
+      "<h3>" +
+      esc(d.title) +
+      "</h3>" +
+      "</div>" +
+      '<div class="d-body">' +
+      dfield("Status", statusPill(d)) +
+      dfield("Pod", esc(d.pod)) +
+      dfield("Priority", d.priority || "—") +
+      dfield("SPOC", d.spoc || "—") +
+      (d.theme ? dfield("Theme", esc(d.theme)) : "") +
+      dfield("Quarter", "Q3 FY27") +
+      (d.targetDate ? dfield("Target", formatDate(d.targetDate)) : "") +
+      (d.summary ? '<div class="d-sum">' + esc(d.summary) + "</div>" : "") +
+      '<div class="d-actions">' +
+      buildJiraButtons(d) +
+      buildAhaButtons(d) +
+      "</div>" +
+      "</div>";
+
+    drawer.classList.add("on");
+    document.getElementById("scrim").classList.add("on");
+    document.getElementById("dClose").addEventListener("click", closeDrawer);
+    document.getElementById("dClose").focus();
+  }
+
+  function closeDrawer() {
+    document.getElementById("drawer").classList.remove("on");
+    document.getElementById("scrim").classList.remove("on");
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // HELPERS
+  // ══════════════════════════════════════════════════════════════
+  function esc(s) {
+    return String(s || "").replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+  function dfield(label, val) {
+    if (!val) return "";
+    return (
+      '<div class="d-field"><span class="dk">' +
+      label +
+      "</span><span>" +
+      val +
+      "</span></div>"
+    );
+  }
+  function statusPill(d) {
+    var sc = STATUS_COLOR[d.status] || "#CCC";
+    return (
+      '<span class="status-pill"><span class="status-dot" style="background:' +
+      sc +
+      '"></span>' +
+      esc(d.status) +
+      "</span>"
+    );
+  }
+  function formatDate(s) {
+    if (!s) return "";
+    try {
+      return new Date(s).toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      });
+    } catch (e) {
+      return s;
+    }
+  }
+  function emptyHtml(title, msg) {
+    return '<div class="empty"><h3>' + title + "</h3><p>" + msg + "</p></div>";
+  }
+</script>
